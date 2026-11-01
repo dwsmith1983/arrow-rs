@@ -1,0 +1,81 @@
+name: list-offsets-bench-x86
+
+# Wall-clock comparison of the ListArray reader benches on a GitHub-hosted x86 runner.
+# Checks out the PR branch, whose last two commits are the bench (HEAD~1) and the reader
+# change (HEAD), builds each side once, then alternates before/after twice from the saved
+# binaries so drift affects both sides and nothing compiles between timed runs.
+
+on:
+  push:
+    branches: [ci/list-offsets-bench-x86]
+
+permissions:
+  contents: read
+
+jobs:
+  bench:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      BENCH_REF: perf/parquet-list-offsets-branch-free
+      FILTER: "ListArray/"
+      CARGO_TERM_COLOR: never
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.BENCH_REF }}
+          fetch-depth: 3
+          persist-credentials: false
+
+      - name: Machine
+        run: |
+          lscpu | grep -E 'Model name|^CPU\(s\)' | cut -c1-200
+          git log --oneline -3
+
+      - name: Build both sides
+        run: |
+          build() {
+            git checkout -q "$1"
+            cargo bench -p parquet --features arrow,test_common,experimental --bench arrow_reader \
+              --no-run --message-format=json \
+              | jq -r 'select(.executable != null and .target.name == "arrow_reader") | .executable' \
+              | tail -1 > exe.txt
+            test -s exe.txt
+            cp "$(cat exe.txt)" "$RUNNER_TEMP/$2"
+          }
+          build HEAD~1 bench-before
+          build "$BENCH_REF" bench-after
+          ls -la "$RUNNER_TEMP"/bench-*
+
+      - name: Round 1
+        shell: bash
+        env:
+          CRITERION_HOME: ${{ github.workspace }}/criterion
+        run: |
+          args=(--bench "$FILTER" --noplot --measurement-time 10)
+          "$RUNNER_TEMP/bench-before" "${args[@]}" --save-baseline before1
+          "$RUNNER_TEMP/bench-after" "${args[@]}" --baseline before1 | tee round1.txt
+
+      - name: Round 2
+        shell: bash
+        env:
+          CRITERION_HOME: ${{ github.workspace }}/criterion
+        run: |
+          args=(--bench "$FILTER" --noplot --measurement-time 10)
+          "$RUNNER_TEMP/bench-after" "${args[@]}" --save-baseline after2
+          "$RUNNER_TEMP/bench-before" "${args[@]}" --baseline after2 | tee round2.txt
+
+      - name: Summary
+        run: |
+          echo "Round 1: after vs before (negative = faster with the change)"
+          grep -E '^arrow_array_reader|change:' round1.txt
+          echo "Round 2: before vs after (positive = slower without the change)"
+          grep -E '^arrow_array_reader|change:' round2.txt
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: criterion
+          path: |
+            round1.txt
+            round2.txt
+            criterion
