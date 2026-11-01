@@ -1,6 +1,6 @@
-name: list-offsets-bench-x86
+name: list-offsets-bench
 
-# Wall-clock comparison of the ListArray reader benches on a GitHub-hosted x86 runner.
+# Wall-clock comparison of the ListArray reader benches on GitHub-hosted x86 and arm64 runners.
 # Checks out the PR branch, whose last two commits are the bench (HEAD~1) and the reader
 # change (HEAD), builds each side once, then alternates before/after twice from the saved
 # binaries so drift affects both sides and nothing compiles between timed runs.
@@ -14,8 +14,12 @@ permissions:
 
 jobs:
   bench:
-    runs-on: ubuntu-latest
-    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-latest, ubuntu-24.04-arm]
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
     env:
       BENCH_REF: perf/parquet-list-offsets-branch-free
       FILTER: "ListArray/"
@@ -26,6 +30,19 @@ jobs:
           ref: ${{ env.BENCH_REF }}
           fetch-depth: 3
           persist-credentials: false
+
+      - name: Tools
+        run: |
+          command -v jq || { sudo apt-get update -q && sudo apt-get install -y -q jq; }
+          if ! command -v rustup; then
+            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain none
+            echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+          fi
+
+      - name: Toolchain
+        run: |
+          rustup install
+          rustc --version
 
       - name: Machine
         run: |
@@ -74,7 +91,7 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: criterion
+          name: criterion-${{ matrix.runner }}
           path: |
             round1.txt
             round2.txt
